@@ -1,4 +1,10 @@
 # ===========================
+# Scripts de deploy com credenciais (não versionar)
+# ===========================
+EXECUTAR-DEPLOY.ps1
+executar-deploy.ps1
+
+# ===========================
 # Dependências
 # ===========================
 node_modules/
