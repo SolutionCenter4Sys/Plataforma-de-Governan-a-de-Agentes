@@ -10,6 +10,10 @@ import SmartToyRoundedIcon from '@mui/icons-material/SmartToyRounded';
 import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import ChatRoundedIcon from '@mui/icons-material/ChatRounded';
 import SettingsRoundedIcon from '@mui/icons-material/SettingsRounded';
+import DescriptionRoundedIcon from '@mui/icons-material/DescriptionRounded';
+import MonitorHeartRoundedIcon from '@mui/icons-material/MonitorHeartRounded';
+import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded';
+import AdminPanelSettingsRoundedIcon from '@mui/icons-material/AdminPanelSettingsRounded';
 import CircleIcon from '@mui/icons-material/Circle';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -69,12 +73,35 @@ const AgentesLogo: React.FC<{ size?: number }> = ({ size = 40 }) => (
 
 const DRAWER_WIDTH = 256;
 
-const NAV_ITEMS = [
-  { label: 'Dashboard', path: '/', icon: <DashboardRoundedIcon /> },
-  { label: 'Agentes', path: '/agents', icon: <SmartToyRoundedIcon /> },
-  { label: 'Workflows', path: '/workflow', icon: <AutoAwesomeRoundedIcon /> },
-  { label: 'Chat', path: '/chat', icon: <ChatRoundedIcon /> },
-  { label: 'Configurações', path: '/settings', icon: <SettingsRoundedIcon /> },
+interface NavGroup {
+  title: string;
+  items: { label: string; path: string; icon: React.ReactNode }[];
+}
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    title: 'Operação',
+    items: [
+      { label: 'Dashboard', path: '/', icon: <DashboardRoundedIcon /> },
+      { label: 'Agentes', path: '/agents', icon: <SmartToyRoundedIcon /> },
+      { label: 'Workflows', path: '/workflow', icon: <AutoAwesomeRoundedIcon /> },
+      { label: 'Chat', path: '/chat', icon: <ChatRoundedIcon /> },
+    ],
+  },
+  {
+    title: 'Governança',
+    items: [
+      { label: 'Painel Admin', path: '/admin', icon: <AdminPanelSettingsRoundedIcon /> },
+      { label: 'Observabilidade', path: '/observability', icon: <MonitorHeartRoundedIcon /> },
+      { label: 'Versões', path: '/versioning', icon: <HistoryRoundedIcon /> },
+    ],
+  },
+  {
+    title: 'Sistema',
+    items: [
+      { label: 'Configurações', path: '/settings', icon: <SettingsRoundedIcon /> },
+    ],
+  },
 ];
 
 interface LayoutProps {
@@ -142,42 +169,49 @@ export const Layout: React.FC<LayoutProps> = ({ children, mockMode = true }) => 
       <Divider sx={{ borderColor: alpha('#fff', 0.06), mx: 2 }} />
 
       {/* Navigation */}
-      <List sx={{ px: 1.5, py: 1.5, flex: 1 }}>
-        {NAV_ITEMS.map(item => {
-          const active = location.pathname === item.path;
-          return (
-            <ListItem key={item.path} disablePadding sx={{ mb: 0.5 }}>
-              <ListItemButton
-                onClick={() => { navigate(item.path); setMobileOpen(false); }}
-                sx={{
-                  borderRadius: 2,
-                  px: 1.5, py: 1,
-                  bgcolor: active ? alpha(theme.palette.primary.main, 0.15) : 'transparent',
-                  borderLeft: active ? `3px solid ${theme.palette.primary.main}` : '3px solid transparent',
-                  '&:hover': { bgcolor: alpha(theme.palette.primary.main, 0.08) },
-                }}
-              >
-                <ListItemIcon
-                  sx={{
-                    minWidth: 36,
-                    color: active ? theme.palette.primary.main : 'text.secondary',
-                  }}
-                >
-                  {item.icon}
-                </ListItemIcon>
-                <ListItemText
-                  primary={item.label}
-                  primaryTypographyProps={{
-                    fontSize: '14px',
-                    fontWeight: active ? 700 : 500,
-                    color: active ? 'text.primary' : 'text.secondary',
-                  }}
-                />
-              </ListItemButton>
-            </ListItem>
-          );
-        })}
-      </List>
+      <Box sx={{ px: 1.5, py: 1, flex: 1, overflow: 'auto' }}>
+        {NAV_GROUPS.map((group, gi) => (
+          <Box key={group.title}>
+            {gi > 0 && <Divider sx={{ borderColor: alpha('#fff', 0.04), my: 1, mx: 0.5 }} />}
+            <Typography variant="caption" sx={{ px: 1.5, py: 0.5, display: 'block', color: alpha('#fff', 0.3), fontWeight: 700, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '0.12em' }}>
+              {group.title}
+            </Typography>
+            <List disablePadding>
+              {group.items.map(item => {
+                const active = location.pathname === item.path
+                  || (item.path !== '/' && location.pathname.startsWith(item.path))
+                  || (item.path === '/workflow' && (location.pathname.startsWith('/executions/') || location.pathname.startsWith('/results/')));
+                return (
+                  <ListItem key={`${group.title}-${item.path}`} disablePadding sx={{ mb: 0.3 }}>
+                    <ListItemButton
+                      onClick={() => { navigate(item.path); setMobileOpen(false); }}
+                      sx={{
+                        borderRadius: 2,
+                        px: 1.5, py: 0.8,
+                        bgcolor: active ? alpha(theme.palette.primary.main, 0.15) : 'transparent',
+                        borderLeft: active ? `3px solid ${theme.palette.primary.main}` : '3px solid transparent',
+                        '&:hover': { bgcolor: alpha(theme.palette.primary.main, 0.08) },
+                      }}
+                    >
+                      <ListItemIcon sx={{ minWidth: 32, color: active ? theme.palette.primary.main : 'text.secondary' }}>
+                        {item.icon}
+                      </ListItemIcon>
+                      <ListItemText
+                        primary={item.label}
+                        primaryTypographyProps={{
+                          fontSize: '13px',
+                          fontWeight: active ? 700 : 500,
+                          color: active ? 'text.primary' : 'text.secondary',
+                        }}
+                      />
+                    </ListItemButton>
+                  </ListItem>
+                );
+              })}
+            </List>
+          </Box>
+        ))}
+      </Box>
 
       {/* Footer */}
       <Box sx={{ p: 2, borderTop: `1px solid ${alpha('#fff', 0.06)}` }}>

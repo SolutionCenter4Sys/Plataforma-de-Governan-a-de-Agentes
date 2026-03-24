@@ -2,13 +2,14 @@ import React, { useEffect, useState } from 'react';
 import {
   Box, Grid, Card, CardContent, Typography,
   ToggleButtonGroup, ToggleButton, Select, MenuItem,
-  FormControl, InputLabel, TextField, CircularProgress,
+  FormControl, InputLabel, TextField,
   Divider, alpha, useTheme, Autocomplete, Chip,
 } from '@mui/material';
 import { useSearchParams } from 'react-router-dom';
 import { ChatInterface } from '../components/ChatInterface/ChatInterface';
-import { AgentCard } from '../components/AgentCard/AgentCard';
-import { agentsApi } from '../services/api';
+import { PageErrorState } from '../components/Feedback/PageErrorState';
+import { PageLoader } from '../components/Feedback/PageLoader';
+import { useAgentsList } from '../hooks/useAgentsList';
 import { Agent, LLMMode } from '../types';
 
 const MODE_OPTIONS: { value: LLMMode; label: string; desc: string }[] = [
@@ -21,32 +22,22 @@ const MODE_OPTIONS: { value: LLMMode; label: string; desc: string }[] = [
 export const ChatPage: React.FC = () => {
   const theme = useTheme();
   const [searchParams] = useSearchParams();
-  const [agents, setAgents] = useState<Agent[]>([]);
+  const { data: agents, loading, error, reload } = useAgentsList();
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const [mode, setMode] = useState<LLMMode>('ask');
   const [provider, setProvider] = useState('mock');
   const [model, setModel] = useState('mock');
   const [apiKey, setApiKey] = useState('');
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    agentsApi.list().then(list => {
-      setAgents(list);
-      const agentParam = searchParams.get('agent');
-      if (agentParam) {
-        const found = list.find(a => a.id === agentParam);
-        if (found) setSelectedAgent(found);
-      }
-    }).finally(() => setLoading(false));
-  }, [searchParams]);
+    const agentParam = searchParams.get('agent');
+    if (!agentParam) return;
+    const found = agents.find(a => a.id === agentParam);
+    if (found) setSelectedAgent(found);
+  }, [agents, searchParams]);
 
-  if (loading) {
-    return (
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '80vh' }}>
-        <CircularProgress />
-      </Box>
-    );
-  }
+  if (loading) return <PageLoader />;
+  if (error) return <PageErrorState message={error} onRetry={reload} />;
 
   return (
     <Box sx={{ height: { md: '100vh' }, display: 'flex', flexDirection: 'column' }}>

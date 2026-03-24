@@ -1,12 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Box, Grid, Card, CardContent, Typography, TextField,
-  Button, Stepper, Step, StepLabel, StepContent,
-  Chip, CircularProgress, Alert, Divider,
+  Button, Chip, CircularProgress, Alert, Divider,
   Select, MenuItem, FormControl, InputLabel,
   LinearProgress, Paper, alpha, useTheme,
-  IconButton, Tooltip, Collapse, List, ListItem, ListItemButton,
-  ListItemText, ListItemIcon, InputAdornment,
+  IconButton, Tooltip, Collapse, InputAdornment,
 } from '@mui/material';
 import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
@@ -17,11 +15,21 @@ import AccessTimeRoundedIcon from '@mui/icons-material/AccessTimeRounded';
 import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import EditRoundedIcon from '@mui/icons-material/EditRounded';
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
+import CodeRoundedIcon from '@mui/icons-material/CodeRounded';
+import ViewListRoundedIcon from '@mui/icons-material/ViewListRounded';
+import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded';
+import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
+import ExpandLessRoundedIcon from '@mui/icons-material/ExpandLessRounded';
+import OpenInNewRoundedIcon from '@mui/icons-material/OpenInNewRounded';
+import HourglassEmptyRoundedIcon from '@mui/icons-material/HourglassEmptyRounded';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useNavigate } from 'react-router-dom';
-import { workflowApi } from '../services/api';
-import { WorkflowJob, WorkflowCatalogEntry } from '../types';
+import { workflowApi, managedAgentsApi } from '../services/api';
+import { PageErrorState } from '../components/Feedback/PageErrorState';
+import { PageLoader } from '../components/Feedback/PageLoader';
+import { useWorkflowCatalog } from '../hooks/useWorkflowCatalog';
+import { WorkflowJob, WorkflowCatalogEntry, InputField } from '../types';
 import { MODULE_LABELS, MODULE_COLORS } from '../types';
 
 const CATEGORIES = ['Todos', 'Desenvolvimento', 'Planejamento', 'Arquitetura', 'Qualidade', 'Inovação', 'Análise', 'DevOps', 'Segurança', 'Colaboração'];
@@ -132,12 +140,38 @@ const WorkflowCard: React.FC<{
   );
 };
 
+/* ── Classification color helper ──────────────────────────────────────── */
+const classificationColor = (c: string) => {
+  if (c === 'OBRIGATORIO') return '#F44336';
+  if (c === 'DESEJAVEL') return '#FF9800';
+  return '#9E9E9E';
+};
+
+interface WorkflowAgentField extends InputField {
+  agentId: string;
+  agentName: string;
+  key: string;
+}
+
+function parseAgentFieldValue(field: WorkflowAgentField, rawValue: string): unknown {
+  if (rawValue === '') return '';
+  if (field.dataType === 'Número') return Number(rawValue);
+  if (field.dataType === 'JSON') return JSON.parse(rawValue);
+  return rawValue;
+}
+
+function isBlockingField(field: WorkflowAgentField): boolean {
+  if (field.behaviorIfAbsent === 'ASSUME') return false;
+  return field.classification === 'OBRIGATORIO' || field.behaviorIfAbsent === 'BLOCK' || field.behaviorIfAbsent === 'ASK' || field.behaviorIfAbsent === 'MENU';
+}
+
 /* ── Dynamic Form ─────────────────────────────────────────────────────────── */
 const WorkflowForm: React.FC<{
   workflow: WorkflowCatalogEntry;
   onBack: () => void;
 }> = ({ workflow, onBack }) => {
   const theme = useTheme();
+  const navigate = useNavigate();
   const moduleColor = MODULE_COLORS[workflow.module] ?? workflow.color;
 
   const [inputs, setInputs] = useState<Record<string, string>>(() => {
@@ -145,6 +179,12 @@ const WorkflowForm: React.FC<{
     workflow.inputs.forEach((inp) => { defaults[inp.id] = inp.default ?? ''; });
     return defaults;
   });
+
+  const [jsonMode, setJsonMode] = useState(false);
+  const [jsonRaw, setJsonRaw] = useState('');
+  const [agentInputFields, setAgentInputFields] = useState<WorkflowAgentField[]>([]);
+  const [agentFieldValues, setAgentFieldValues] = useState<Record<string, string>>({});
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const [jobId, setJobId] = useState<string | null>(null);
   const [job, setJob] = useState<WorkflowJob | null>(null);
@@ -156,6 +196,40 @@ const WorkflowForm: React.FC<{
   useEffect(() => {
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, []);
+
+  useEffect(() => {
+    const firstStepAgent = workflow.steps[0]?.agent;
+    if (!firstStepAgent) return;
+    const agentIds = firstStepAgent.split(/[+,]/).map(a => a.trim()).filter(Boolean);
+    Promise.all(agentIds.map(id => managedAgentsApi.get(id).catch(() => null)))
+      .then(results => {
+        const fields: WorkflowAgentField[] = [];
+        const defaults: Record<string, string> = {};
+        results.forEach(agent => {
+          if (agent?.inputFields) {
+            agent.inputFields.forEach((field, index) => {
+              const key = `${agent.id}::${field.name || `field_${index + 1}`}`;
+              fields.push({
+                ...field,
+                agentId: agent.id,
+                agentName: agent.name,
+                key,
+              });
+              if (field.behaviorIfAbsent === 'ASSUME' && field.defaultOrFallback) {
+                defaults[key] = field.defaultOrFallback;
+              }
+            });
+          }
+        });
+        setFieldErrors({});
+        setAgentFieldValues((prev) => ({ ...defaults, ...prev }));
+        setAgentInputFields(fields);
+      })
+      .catch(() => {
+        setFieldErrors({});
+        setAgentInputFields([]);
+      });
+  }, [workflow]);
 
   useEffect(() => {
     if (!jobId || !polling) return;
@@ -175,22 +249,110 @@ const WorkflowForm: React.FC<{
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [jobId, polling]);
 
+  const buildAgentFieldPayload = () => {
+    if (agentInputFields.length === 0) return {};
+    return agentInputFields.reduce<Record<string, Record<string, unknown>>>((acc, field) => {
+      const rawValue = agentFieldValues[field.key] ?? '';
+      if (!rawValue) return acc;
+      if (!acc[field.agentId]) acc[field.agentId] = {};
+      try {
+        acc[field.agentId][field.name] = parseAgentFieldValue(field, rawValue);
+      } catch {
+        acc[field.agentId][field.name] = rawValue;
+      }
+      return acc;
+    }, {});
+  };
+
+  const validateAgentFields = () => {
+    const nextErrors: Record<string, string> = {};
+
+    agentInputFields.forEach((field) => {
+      const rawValue = (agentFieldValues[field.key] ?? '').trim();
+
+      if (!rawValue) {
+        if (isBlockingField(field)) {
+          nextErrors[field.key] = `O campo "${field.name}" precisa ser preenchido.`;
+        }
+        return;
+      }
+
+      if (field.dataType === 'Número' && Number.isNaN(Number(rawValue))) {
+        nextErrors[field.key] = `O campo "${field.name}" precisa ser numérico.`;
+      }
+
+      if (field.dataType === 'JSON') {
+        try {
+          JSON.parse(rawValue);
+        } catch {
+          nextErrors[field.key] = `O campo "${field.name}" precisa conter JSON válido.`;
+        }
+      }
+    });
+
+    setFieldErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
+  };
+
+  const buildPayload = () => {
+    const agentFields = buildAgentFieldPayload();
+    const payload: Record<string, unknown> = {
+      workflowId: workflow.id,
+      projectName: inputs['projectName'] ?? '',
+      inputs: { ...inputs },
+    };
+    if (Object.keys(agentFields).length > 0) {
+      payload.agentFields = agentFields;
+    }
+    return payload;
+  };
+
+  const toggleJsonMode = () => {
+    if (!jsonMode) {
+      setJsonRaw(JSON.stringify(buildPayload(), null, 2));
+    }
+    setJsonMode(!jsonMode);
+  };
+
   const handleRun = async () => {
     setError('');
-    const projectName = inputs['projectName']?.trim();
+    setFieldErrors({});
+
+    let runInputs = inputs;
+    let projectName = inputs['projectName']?.trim() ?? '';
+    let runAgentFields = buildAgentFieldPayload();
+
+    if (jsonMode) {
+      try {
+        const parsed = JSON.parse(jsonRaw);
+        runInputs = parsed.inputs ?? parsed;
+        projectName = parsed.projectName ?? projectName;
+        runAgentFields = parsed.agentFields ?? runAgentFields;
+      } catch {
+        setError('JSON inválido. Verifique a sintaxe.');
+        return;
+      }
+    }
+
     if (!projectName) { setError('O campo "Nome do Projeto" é obrigatório'); return; }
+    if (!jsonMode && !validateAgentFields()) {
+      setError('Corrija os campos destacados dos agentes antes de executar.');
+      return;
+    }
 
     try {
       const res = await workflowApi.run({
         workflowId: workflow.id,
         projectName,
-        inputs,
+        inputs: runInputs,
+        agentFields: runAgentFields,
         startFromStep: 1,
       });
       setJobId(res.jobId);
       setJob(null);
       setSelectedStep(null);
       setPolling(true);
+      navigate(`/executions/${res.jobId}`);
     } catch (e) {
       setError(String(e));
     }
@@ -231,46 +393,160 @@ const WorkflowForm: React.FC<{
         <Grid item xs={12} md={5}>
           <Card sx={{ border: `1px solid ${alpha(moduleColor, 0.3)}` }}>
             <CardContent sx={{ p: 3 }}>
-              <Typography variant="subtitle1" fontWeight={700} gutterBottom>
-                Configurar Execução
-              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+                <Typography variant="subtitle1" fontWeight={700}>
+                  Configurar Execução
+                </Typography>
+                <Tooltip title={jsonMode ? 'Modo Formulário' : 'Modo JSON'}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={jsonMode ? <ViewListRoundedIcon /> : <CodeRoundedIcon />}
+                    onClick={toggleJsonMode}
+                    sx={{ textTransform: 'none', fontWeight: 600, fontSize: '11px' }}
+                  >
+                    {jsonMode ? 'Formulário' : 'JSON'}
+                  </Button>
+                </Tooltip>
+              </Box>
 
-              {workflow.inputs.map((inp) => (
-                <Box key={inp.id} sx={{ mb: 2 }}>
-                  {inp.type === 'select' ? (
-                    <FormControl fullWidth size="small">
-                      <InputLabel>{inp.label}{inp.required ? ' *' : ''}</InputLabel>
-                      <Select
-                        value={inputs[inp.id] ?? ''}
-                        label={inp.label + (inp.required ? ' *' : '')}
-                        onChange={(e) => setInputs((prev) => ({ ...prev, [inp.id]: e.target.value }))}
-                      >
-                        {(inp.options ?? []).map((opt) => (
-                          <MenuItem key={opt} value={opt}>{opt}</MenuItem>
-                        ))}
-                      </Select>
-                    </FormControl>
-                  ) : inp.type === 'textarea' ? (
-                    <TextField
-                      fullWidth multiline rows={5}
-                      label={inp.label + (inp.required ? ' *' : '')}
-                      placeholder={inp.placeholder}
-                      value={inputs[inp.id] ?? ''}
-                      onChange={(e) => setInputs((prev) => ({ ...prev, [inp.id]: e.target.value }))}
-                      size="small"
-                    />
-                  ) : (
-                    <TextField
-                      fullWidth
-                      label={inp.label + (inp.required ? ' *' : '')}
-                      placeholder={inp.placeholder}
-                      value={inputs[inp.id] ?? ''}
-                      onChange={(e) => setInputs((prev) => ({ ...prev, [inp.id]: e.target.value }))}
-                      size="small"
-                    />
+              {jsonMode ? (
+                <TextField
+                  fullWidth
+                  multiline
+                  rows={14}
+                  value={jsonRaw}
+                  onChange={(e) => setJsonRaw(e.target.value)}
+                  size="small"
+                  sx={{
+                    mb: 2,
+                    '& .MuiInputBase-input': { fontFamily: 'monospace', fontSize: '12px' },
+                  }}
+                />
+              ) : (
+                <>
+                  {workflow.inputs.map((inp) => (
+                    <Box key={inp.id} sx={{ mb: 2 }}>
+                      {inp.type === 'select' ? (
+                        <FormControl fullWidth size="small">
+                          <InputLabel>{inp.label}{inp.required ? ' *' : ''}</InputLabel>
+                          <Select
+                            value={inputs[inp.id] ?? ''}
+                            label={inp.label + (inp.required ? ' *' : '')}
+                            onChange={(e) => setInputs((prev) => ({ ...prev, [inp.id]: e.target.value }))}
+                          >
+                            {(inp.options ?? []).map((opt) => (
+                              <MenuItem key={opt} value={opt}>{opt}</MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                      ) : inp.type === 'textarea' ? (
+                        <TextField
+                          fullWidth multiline rows={5}
+                          label={inp.label + (inp.required ? ' *' : '')}
+                          placeholder={inp.placeholder}
+                          value={inputs[inp.id] ?? ''}
+                          onChange={(e) => setInputs((prev) => ({ ...prev, [inp.id]: e.target.value }))}
+                          size="small"
+                        />
+                      ) : (
+                        <TextField
+                          fullWidth
+                          label={inp.label + (inp.required ? ' *' : '')}
+                          placeholder={inp.placeholder}
+                          value={inputs[inp.id] ?? ''}
+                          onChange={(e) => setInputs((prev) => ({ ...prev, [inp.id]: e.target.value }))}
+                          size="small"
+                        />
+                      )}
+                    </Box>
+                  ))}
+
+                  {/* Agent Input Fields from first step */}
+                  {agentInputFields.length > 0 && (
+                    <Box sx={{ mt: 1, mb: 2 }}>
+                      <Divider sx={{ mb: 2 }} />
+                      <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1.5 }}>
+                        Campos dos Agentes
+                      </Typography>
+                      {Object.entries(agentInputFields.reduce<Record<string, WorkflowAgentField[]>>((acc, field) => {
+                        if (!acc[field.agentId]) acc[field.agentId] = [];
+                        acc[field.agentId].push(field);
+                        return acc;
+                      }, {})).map(([agentId, fields]) => (
+                        <Box key={agentId} sx={{ mb: 2.5 }}>
+                          <Typography variant="caption" sx={{ textTransform: 'uppercase', letterSpacing: '0.08em', color: 'text.secondary', fontWeight: 700, display: 'block', mb: 1 }}>
+                            {fields[0]?.agentName}
+                          </Typography>
+                          {fields.map((field) => (
+                            <Box key={field.key} sx={{ mb: 2 }}>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5, flexWrap: 'wrap' }}>
+                                <Chip
+                                  label={field.classification}
+                                  size="small"
+                                  sx={{
+                                    height: 18, fontSize: '9px', fontWeight: 700,
+                                    bgcolor: alpha(classificationColor(field.classification), 0.12),
+                                    color: classificationColor(field.classification),
+                                  }}
+                                />
+                                {field.dataType && (
+                                  <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '10px' }}>
+                                    {field.dataType}
+                                  </Typography>
+                                )}
+                                {field.behaviorIfAbsent && (
+                                  <Chip label={field.behaviorIfAbsent} size="small" variant="outlined" sx={{ height: 18, fontSize: '9px', fontWeight: 700 }} />
+                                )}
+                                {isBlockingField(field) && !(agentFieldValues[field.key] ?? '') && (
+                                  <Tooltip title="Campo obrigatório para prosseguir com a execução">
+                                    <WarningAmberRoundedIcon sx={{ fontSize: 14, color: '#F44336' }} />
+                                  </Tooltip>
+                                )}
+                              </Box>
+                              {field.dataType === 'Seleção' || field.behaviorIfAbsent === 'MENU' ? (
+                                <FormControl fullWidth size="small" error={!!fieldErrors[field.key]}>
+                                  <InputLabel>{field.name}</InputLabel>
+                                  <Select
+                                    value={agentFieldValues[field.key] ?? ''}
+                                    label={field.name}
+                                    onChange={(e) => setAgentFieldValues((prev) => ({ ...prev, [field.key]: e.target.value }))}
+                                  >
+                                    {(field.options ?? []).map((option) => (
+                                      <MenuItem key={option} value={option}>{option}</MenuItem>
+                                    ))}
+                                  </Select>
+                                </FormControl>
+                              ) : (
+                                <TextField
+                                  fullWidth
+                                  size="small"
+                                  label={field.name}
+                                  placeholder={field.validExample ?? field.description ?? ''}
+                                  helperText={
+                                    fieldErrors[field.key]
+                                      ?? (
+                                        field.behaviorIfAbsent === 'ASSUME' && field.defaultOrFallback
+                                          ? `Padrão: ${field.defaultOrFallback}`
+                                          : field.description ?? undefined
+                                      )
+                                  }
+                                  error={!!fieldErrors[field.key]}
+                                  value={agentFieldValues[field.key] ?? ''}
+                                  onChange={(e) => setAgentFieldValues((prev) => ({ ...prev, [field.key]: e.target.value }))}
+                                  multiline={field.dataType === 'Texto longo' || field.dataType === 'JSON'}
+                                  rows={field.dataType === 'Texto longo' || field.dataType === 'JSON' ? 3 : undefined}
+                                  type={field.dataType === 'Número' ? 'number' : 'text'}
+                                />
+                              )}
+                            </Box>
+                          ))}
+                        </Box>
+                      ))}
+                    </Box>
                   )}
-                </Box>
-              ))}
+                </>
+              )}
 
               {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
@@ -283,6 +559,31 @@ const WorkflowForm: React.FC<{
               >
                 {isRunning || polling ? 'Executando...' : 'Executar Workflow'}
               </Button>
+
+              {/* Payload Preview */}
+              {!jsonMode && (
+                <Collapse in={Object.values(inputs).some(v => !!v) || Object.values(agentFieldValues).some(v => !!v)}>
+                  <Paper
+                    variant="outlined"
+                    sx={{
+                      mt: 2, p: 1.5,
+                      bgcolor: alpha(theme.palette.background.default, 0.5),
+                      maxHeight: 180, overflow: 'auto',
+                    }}
+                  >
+                    <Typography variant="caption" sx={{ color: 'text.disabled', fontWeight: 600, display: 'block', mb: 0.5 }}>
+                      Payload JSON
+                    </Typography>
+                    <Typography
+                      variant="body2"
+                      component="pre"
+                      sx={{ fontFamily: 'monospace', fontSize: '10px', whiteSpace: 'pre-wrap', m: 0 }}
+                    >
+                      {JSON.stringify(buildPayload(), null, 2)}
+                    </Typography>
+                  </Paper>
+                </Collapse>
+              )}
             </CardContent>
           </Card>
 
@@ -307,13 +608,13 @@ const WorkflowForm: React.FC<{
 
         {/* Results */}
         <Grid item xs={12} md={7}>
-          {/* Progress */}
+          {/* Progress + Segmented Bar */}
           {(isRunning || isDone || isError) && job && (
             <Card sx={{ mb: 2 }}>
               <CardContent sx={{ p: 2.5 }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
                   <Typography variant="subtitle2" fontWeight={700}>
-                    {isRunning ? `Executando: ${job.projectName}` : isDone ? `✅ Concluído: ${job.projectName}` : `❌ Erro: ${job.projectName}`}
+                    {isRunning ? `Executando: ${job.projectName}` : isDone ? `Concluído: ${job.projectName}` : `Erro: ${job.projectName}`}
                   </Typography>
                   <Chip
                     label={isRunning ? 'Em Andamento' : isDone ? 'Concluído' : 'Erro'}
@@ -326,8 +627,24 @@ const WorkflowForm: React.FC<{
                   variant="determinate"
                   value={isDone ? 100 : isError ? progress : progress}
                   color={isDone ? 'success' : isError ? 'error' : 'warning'}
-                  sx={{ mb: 1, height: 6, borderRadius: 3 }}
+                  sx={{ mb: 1.5, height: 6, borderRadius: 3 }}
                 />
+
+                {/* Segmented progress bar — one colored segment per step */}
+                <Box sx={{ display: 'flex', gap: '2px', height: 8, borderRadius: 2, overflow: 'hidden', mb: 1 }}>
+                  {workflow.steps.map((step, i) => {
+                    const stepNum = i + 1;
+                    const stepDone = !!job.result?.[`step${stepNum}`];
+                    const stepRunning = job.currentStep === stepNum && isRunning;
+                    const stepError = job.currentStep === stepNum && isError;
+                    const color = stepDone ? '#4CAF50' : stepRunning ? '#FF9800' : stepError ? '#F44336' : alpha('#fff', 0.08);
+                    return (
+                      <Tooltip key={i} title={`${step.name} — ${stepDone ? 'Concluído' : stepRunning ? 'Executando' : stepError ? 'Erro' : 'Pendente'}`}>
+                        <Box sx={{ flex: 1, bgcolor: color, transition: 'background-color 0.3s' }} />
+                      </Tooltip>
+                    );
+                  })}
+                </Box>
 
                 <Typography variant="caption" color="text.secondary">
                   Step {job.currentStep} / {job.totalSteps} — {progress}%
@@ -336,49 +653,92 @@ const WorkflowForm: React.FC<{
                 {isError && job.error && (
                   <Alert severity="error" sx={{ mt: 1.5 }}>{job.error}</Alert>
                 )}
+
+                {/* Link to full results */}
+                {isDone && (
+                  <Button
+                    size="small"
+                    endIcon={<OpenInNewRoundedIcon />}
+                    onClick={() => navigate(`/results/${job.id}`)}
+                    sx={{ mt: 1.5, textTransform: 'none', fontWeight: 700 }}
+                  >
+                    Ver resultados completos
+                  </Button>
+                )}
               </CardContent>
             </Card>
           )}
 
-          {/* Step Results */}
-          {job?.result && Object.keys(job.result).length > 0 && (
-            <Card>
+          {/* Expandable Timeline per Step */}
+          {(isRunning || isDone || isError) && job && (
+            <Card sx={{ mb: 2 }}>
               <CardContent sx={{ p: 2.5 }}>
                 <Typography variant="subtitle2" fontWeight={700} gutterBottom>
-                  Resultados por Step
+                  Timeline de Steps
                 </Typography>
+                {workflow.steps.map((step, i) => {
+                  const stepNum = i + 1;
+                  const key = `step${stepNum}`;
+                  const stepDone = !!job.result?.[key];
+                  const stepRunning = job.currentStep === stepNum && isRunning;
+                  const stepError = job.currentStep === stepNum && isError;
+                  const isExpanded = selectedStep === stepNum;
+                  const statusColor = stepDone ? '#4CAF50' : stepRunning ? '#FF9800' : stepError ? '#F44336' : alpha('#fff', 0.2);
+                  const statusIcon = stepDone
+                    ? <CheckCircleRoundedIcon sx={{ fontSize: 18, color: statusColor }} />
+                    : stepRunning
+                      ? <CircularProgress size={16} sx={{ color: statusColor }} />
+                      : stepError
+                        ? <ErrorRoundedIcon sx={{ fontSize: 18, color: statusColor }} />
+                        : <HourglassEmptyRoundedIcon sx={{ fontSize: 18, color: statusColor }} />;
 
-                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
-                  {workflow.steps.map((step, i) => {
-                    const key = `step${i + 1}`;
-                    const done = !!job.result?.[key];
-                    return (
-                      <Chip
-                        key={key}
-                        label={`${step.icon} ${step.name}`}
-                        size="small"
-                        variant={selectedStep === i + 1 ? 'filled' : 'outlined'}
-                        color={done ? 'success' : 'default'}
-                        onClick={() => done && setSelectedStep(i + 1)}
-                        sx={{ cursor: done ? 'pointer' : 'default', opacity: done ? 1 : 0.4 }}
-                      />
-                    );
-                  })}
-                </Box>
+                  return (
+                    <Box key={i} sx={{ position: 'relative', pl: 3.5, pb: i < workflow.steps.length - 1 ? 1 : 0 }}>
+                      {i < workflow.steps.length - 1 && (
+                        <Box sx={{ position: 'absolute', left: 10, top: 24, bottom: 0, width: 2, bgcolor: alpha(statusColor, 0.3) }} />
+                      )}
+                      <Box sx={{ position: 'absolute', left: 1, top: 2 }}>
+                        {statusIcon}
+                      </Box>
+                      <Box
+                        sx={{
+                          cursor: stepDone ? 'pointer' : 'default',
+                          p: 1, borderRadius: 1.5,
+                          '&:hover': stepDone ? { bgcolor: alpha('#fff', 0.04) } : {},
+                        }}
+                        onClick={() => stepDone && setSelectedStep(isExpanded ? null : stepNum)}
+                      >
+                        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <Typography variant="body2" fontWeight={600}>{step.icon} {step.name}</Typography>
+                            <Chip
+                              label={stepDone ? 'Concluído' : stepRunning ? 'Executando' : stepError ? 'Erro' : 'Pendente'}
+                              size="small"
+                              sx={{ height: 18, fontSize: '9px', fontWeight: 700, bgcolor: alpha(statusColor, 0.12), color: statusColor }}
+                            />
+                          </Box>
+                          {stepDone && (
+                            isExpanded
+                              ? <ExpandLessRoundedIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
+                              : <ExpandMoreRoundedIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
+                          )}
+                        </Box>
+                        <Typography variant="caption" color="text.secondary">Agente: {step.agent}</Typography>
+                      </Box>
 
-                {selectedStep !== null && job.result?.[`step${selectedStep}`] && (
-                  <Paper
-                    variant="outlined"
-                    sx={{ p: 2, maxHeight: 480, overflow: 'auto', bgcolor: alpha(theme.palette.background.default, 0.5) }}
-                  >
-                    <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
-                      {workflow.steps[selectedStep - 1]?.icon} {workflow.steps[selectedStep - 1]?.name}
-                    </Typography>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {job.result[`step${selectedStep}`]}
-                    </ReactMarkdown>
-                  </Paper>
-                )}
+                      <Collapse in={isExpanded && stepDone}>
+                        <Paper
+                          variant="outlined"
+                          sx={{ p: 2, mt: 1, mb: 1, maxHeight: 360, overflow: 'auto', bgcolor: alpha(theme.palette.background.default, 0.5) }}
+                        >
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {job.result?.[key] ?? ''}
+                          </ReactMarkdown>
+                        </Paper>
+                      </Collapse>
+                    </Box>
+                  );
+                })}
               </CardContent>
             </Card>
           )}
@@ -429,18 +789,10 @@ const WorkflowForm: React.FC<{
 export const WorkflowPage: React.FC = () => {
   const theme = useTheme();
   const navigate = useNavigate();
-  const [catalog, setCatalog] = useState<WorkflowCatalogEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data: catalog, loading, error, reload } = useWorkflowCatalog();
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('Todos');
   const [selected, setSelected] = useState<WorkflowCatalogEntry | null>(null);
-
-  useEffect(() => {
-    workflowApi.getCatalog()
-      .then(setCatalog)
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, []);
 
   const filtered = catalog.filter((w) => {
     const matchSearch = !search || w.name.toLowerCase().includes(search.toLowerCase()) || w.description.toLowerCase().includes(search.toLowerCase()) || w.tags.some((t) => t.toLowerCase().includes(search.toLowerCase()));
@@ -512,9 +864,9 @@ export const WorkflowPage: React.FC = () => {
       </Box>
 
       {loading ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-          <CircularProgress />
-        </Box>
+        <PageLoader height="40vh" />
+      ) : error ? (
+        <PageErrorState message={error} onRetry={reload} />
       ) : filtered.length === 0 ? (
         <Alert severity="info">Nenhum workflow encontrado para os filtros aplicados.</Alert>
       ) : (
