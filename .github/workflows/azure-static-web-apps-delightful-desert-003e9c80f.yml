@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Build and Deploy Job
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
           lfs: false
@@ -30,6 +30,7 @@ jobs:
           # For more information regarding Static Web App workflow configurations, please visit: https://aka.ms/swaworkflowconfig
           app_location: "/" # App source code path (package.json na raiz)
           api_location: "" # Sem Azure Functions
+          app_build_command: "npm run build -- --mode mock" # Publica o frontend-only mock no ambiente estatico
           output_location: "dist" # Vite sempre gera artefatos em dist/
           ###### End of Repository/Build Configurations ######
 
